@@ -4,3 +4,4 @@ faiss-cpu
 numpy
 pillow
 matplotlib
+opencv-python-headless==4.10.0.84
