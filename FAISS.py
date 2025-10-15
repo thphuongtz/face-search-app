@@ -1,35 +1,15 @@
-import os
 import numpy as np
-import face_recognition
-import faiss
-from PIL import Image
+import cv2
+import mediapipe as mp
 
-def load_database(database_folder="database"):
-    """Load toàn bộ ảnh trong thư mục database và tạo embeddings"""
-    paths_db = [
-        os.path.join(database_folder, f)
-        for f in os.listdir(database_folder)
-        if f.lower().endswith((".jpg", ".jpeg", ".png"))
-    ]
+mp_face = mp.solutions.face_mesh
 
-    embeddings, imgs = [], []
-    for path in paths_db:
-        img = np.array(Image.open(path).convert("RGB"))
-        encs = face_recognition.face_encodings(img)
-        if encs:
-            embeddings.append(encs[0].astype("float32"))
-            imgs.append(img)
-    if len(embeddings) == 0:
-        raise ValueError("Không có ảnh hợp lệ trong thư mục database/")
-    embeddings = np.array(embeddings)
-    
-    # Tạo FAISS index
-    d = embeddings.shape[1]
-    index = faiss.IndexFlatL2(d)
-    index.add(embeddings)
-    return index, embeddings, imgs, paths_db
-
-def search_face(index, query_embedding, k=1):
-    """Tìm ảnh gần nhất trong FAISS index"""
-    distances, indices = index.search(np.array([query_embedding]), k)
-    return distances[0], indices[0]
+def get_face_embedding(image):
+    with mp_face.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True) as face_mesh:
+        results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+        if not results.multi_face_landmarks:
+            return None
+        # Lấy toàn bộ 468 điểm khuôn mặt
+        landmarks = results.multi_face_landmarks[0].landmark
+        embedding = np.array([[lm.x, lm.y, lm.z] for lm in landmarks]).flatten()
+        return embedding.astype('float32')
