@@ -1,8 +1,7 @@
 streamlit
 opencv-python-headless
 insightface
-onnxruntime==1.17.3
-faiss-cpu
 numpy
 pillow
 matplotlib
+onnxruntime==1.16.3
