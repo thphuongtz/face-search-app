@@ -1,101 +1,61 @@
-import os
-import numpy as np
-import cv2
-from PIL import Image
 import streamlit as st
-import matplotlib.pyplot as plt
+import cv2
+import numpy as np
+import os
+from PIL import Image
+from FAISS import get_face_embedding
 
-from FAISS import get_face_embedding  # file FAISS.py như ở trên
+st.set_page_config(page_title="Face Search App (MediaPipe)", layout="wide")
 
-# ========== GIAO DIỆN ==========
-st.set_page_config(page_title="Face Search App (MediaPipe + NumPy)", layout="wide")
-st.title("🔍 Face Search App — MediaPipe embeddings + NumPy search")
+st.title("🔍 Face Search App (MediaPipe + NumPy)")
+os.makedirs("data/known_faces", exist_ok=True)
+os.makedirs("data/uploads", exist_ok=True)
 
-# ========== KIỂM TRA THƯ MỤC DATABASE ==========
-database_folder = "database"
-if not os.path.exists(database_folder):
-    st.error("❌ Không tìm thấy thư mục `database/`. Hãy tạo folder 'database' và upload ảnh vào đó.")
-    st.stop()
+tab1, tab2 = st.tabs(["🧠 Add Known Faces", "🔎 Search Face"])
 
-paths_db = [
-    os.path.join(database_folder, f)
-    for f in os.listdir(database_folder)
-    if f.lower().endswith((".jpg", ".jpeg", ".png"))
-]
-if len(paths_db) == 0:
-    st.error("❌ Thư mục `database/` rỗng. Upload tối thiểu 1 ảnh.")
-    st.stop()
+# --- TAB 1 ---
+with tab1:
+    st.header("🧠 Thêm khuôn mặt mới")
+    upload_img = st.file_uploader("Tải ảnh khuôn mặt", type=["jpg", "png", "jpeg"])
+    name = st.text_input("Tên người này:")
 
-# ========== LOAD DATABASE VÀ TẠO EMBEDDINGS ==========
-@st.cache_data(show_spinner=True)
-def load_database(paths):
-    embeddings = []
-    imgs_rgb = []
-    good_paths = []
-    for p in paths:
-        img_bgr = cv2.imread(p)
-        if img_bgr is None:
-            continue
-        emb = get_face_embedding(img_bgr)
-        if emb is not None:
-            embeddings.append(emb)
-            imgs_rgb.append(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
-            good_paths.append(p)
-    if len(embeddings) == 0:
-        return None, None, None
-    return np.vstack(embeddings), imgs_rgb, good_paths
+    if st.button("Lưu vào cơ sở dữ liệu") and upload_img and name:
+        img_path = f"data/known_faces/{name}.jpg"
+        Image.open(upload_img).save(img_path)
+        st.success(f"✅ Đã lưu {name}.jpg vào cơ sở dữ liệu!")
 
-embeddings_db, imgs_db, paths_db_filtered = load_database(paths_db)
-if embeddings_db is None:
-    st.error("⚠️ Không tạo được embedding nào từ database. Hãy kiểm tra ảnh (phải có khuôn mặt rõ ràng).")
-    st.stop()
+# --- TAB 2 ---
+with tab2:
+    st.header("🔎 Tìm kiếm khuôn mặt trong ảnh mới")
+    query_file = st.file_uploader("Chọn ảnh cần tìm", type=["jpg", "png", "jpeg"])
+    if query_file:
+        img_path = f"data/uploads/query.jpg"
+        Image.open(query_file).save(img_path)
+        img = cv2.imread(img_path)
 
-# ========== UPLOAD ẢNH TRUY VẤN ==========
-uploaded_file = st.file_uploader("📤 Tải lên ảnh truy vấn", type=["jpg", "jpeg", "png"])
-if uploaded_file is None:
-    st.info("Upload 1 ảnh để truy vấn. Ảnh trong database: " + str(len(paths_db_filtered)))
-else:
-    # show query
-    img_pil = Image.open(uploaded_file).convert("RGB")
-    img_query_rgb = np.array(img_pil)
-    st.image(img_query_rgb, caption="Ảnh truy vấn", use_container_width=True)
+        boxes, query_emb = get_face_embedding(img)
+        if query_emb is None:
+            st.error("❌ Không phát hiện được khuôn mặt.")
+        else:
+            st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Ảnh tìm kiếm")
 
-    # convert to BGR for mediapipe
-    img_query_bgr = cv2.cvtColor(img_query_rgb, cv2.COLOR_RGB2BGR)
-    emb_query = get_face_embedding(img_query_bgr)
-    if emb_query is None:
-        st.error("Không phát hiện khuôn mặt trong ảnh truy vấn.")
-    else:
-        # compute distances to all embeddings (Euclidean)
-        # embeddings_db shape: (N, D); emb_query shape: (D,)
-        diffs = embeddings_db - emb_query
-        dists = np.linalg.norm(diffs, axis=1)
-        # find best
-        best_idx = int(np.argmin(dists))
-        best_dist = float(dists[best_idx])
+            # Tải cơ sở dữ liệu
+            db = {}
+            for f in os.listdir("data/known_faces"):
+                name = os.path.splitext(f)[0]
+                img_db = cv2.imread(os.path.join("data/known_faces", f))
+                _, emb_db = get_face_embedding(img_db)
+                if emb_db is not None and len(emb_db) > 0:
+                    db[name] = emb_db[0]
 
-        st.subheader("🧠 Kết quả nhận diện")
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            st.image(imgs_db[best_idx], caption=f"Best match: {os.path.basename(paths_db_filtered[best_idx])}")
-        with col2:
-            st.metric("Khoảng cách (Euclidean)", f"{best_dist:.4f}")
+            if len(db) == 0:
+                st.warning("⚠️ Cơ sở dữ liệu trống. Hãy thêm khuôn mặt trước.")
+            else:
+                similarities = {}
+                for name, emb in db.items():
+                    sim = np.dot(query_emb[0], emb) / (np.linalg.norm(query_emb[0])*np.linalg.norm(emb))
+                    similarities[name] = sim
 
-        # show top-k (tùy chọn)
-        k = min(5, len(dists))
-        topk_idx = np.argsort(dists)[:k]
-        st.subheader(f"Top-{k} candidates")
-        cols = st.columns(k)
-        for i, idx in enumerate(topk_idx):
-            with cols[i]:
-                st.image(imgs_db[idx], caption=f"{i+1}. {os.path.basename(paths_db_filtered[idx])}\n{dists[idx]:.4f}", use_column_width=True)
-
-        # biểu đồ so sánh 20 phần tử đầu (nhỏ)
-        st.subheader("📊 So sánh 20 phần tử đầu embedding")
-        plt.figure(figsize=(8, 4))
-        idx_plot = np.arange(20)
-        plt.bar(idx_plot, emb_query[:20], 0.35, label="Query")
-        plt.bar(idx_plot + 0.35, embeddings_db[best_idx][:20], 0.35, label="Database")
-        plt.legend()
-        plt.title("So sánh 20 phần tử đầu embedding")
-        st.pyplot(plt)
+                best_match = max(similarities, key=similarities.get)
+                st.success(f"✅ Kết quả gần nhất: **{best_match}** (similarity={similarities[best_match]:.3f})")
+                st.bar_chart(similarities)
