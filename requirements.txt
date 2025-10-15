@@ -3,4 +3,4 @@ numpy
 Pillow
 matplotlib
 deepface==0.0.93
-faiss-cpu==1.7.4
+faiss-cpu==1.12.0
