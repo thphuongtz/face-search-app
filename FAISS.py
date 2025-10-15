@@ -1,19 +1,18 @@
-# FAISS.py  (giữ tên nếu bạn đã dùng)
+# FAISS.py
 import numpy as np
 import cv2
-import mediapipe as mp
+import insightface
 
-mp_face = mp.solutions.face_mesh
+# Tải model
+model = insightface.app.FaceAnalysis(providers=['CPUExecutionProvider'])
+model.prepare(ctx_id=0, det_size=(640, 640))
 
 def get_face_embedding(image):
     """
-    image: BGR OpenCV image (numpy array)
-    return: 1D float32 embedding (landmark vector) hoặc None nếu không có face
+    image: BGR image (numpy array)
+    return: 1D float32 embedding or None
     """
-    with mp_face.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True) as face_mesh:
-        results = face_mesh.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        if not results.multi_face_landmarks:
-            return None
-        landmarks = results.multi_face_landmarks[0].landmark
-        embedding = np.array([[lm.x, lm.y, lm.z] for lm in landmarks]).flatten()
-        return embedding.astype('float32')
+    faces = model.get(image)
+    if len(faces) == 0:
+        return None
+    return faces[0].normed_embedding.astype('float32')
