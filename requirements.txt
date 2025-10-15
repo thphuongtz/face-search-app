@@ -1,6 +1,6 @@
 streamlit
-mediapipe
 opencv-python-headless
+insightface
 numpy
 pillow
 matplotlib
