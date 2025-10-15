@@ -1,7 +1,6 @@
 streamlit
 mediapipe
 opencv-python-headless
-faiss-cpu
 numpy
 pillow
 matplotlib
