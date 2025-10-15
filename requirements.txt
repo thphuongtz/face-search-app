@@ -1,9 +1,7 @@
 streamlit
-deepface==0.0.79
+mediapipe
+opencv-python-headless
 faiss-cpu
 numpy
 pillow
 matplotlib
-opencv-python-headless==4.10.0.84
-tensorflow==2.15.0
-keras==2.15.0
