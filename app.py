@@ -6,17 +6,17 @@ import numpy as np
 import faiss
 import os
 from FAISS import build_faiss_index
-import matplotlib.pyplot as plt
+import tempfile
 
 # --- Cấu hình ---
-DB_PATH = "database"
+DB_PATH = "database"  # hoặc đường dẫn tới thư mục ảnh của bạn
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # --- Khởi tạo MTCNN và ResNet ---
 mtcnn = MTCNN(image_size=160, margin=0, keep_all=False, post_process=True, device=device)
 resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
 
-# --- Vẽ landmarks ---
+# --- Hàm vẽ landmarks ---
 def show_face_with_landmarks(img, landmarks):
     img_copy = img.copy()
     draw = ImageDraw.Draw(img_copy)
@@ -26,119 +26,63 @@ def show_face_with_landmarks(img, landmarks):
             draw.ellipse((x - r, y - r, x + r, y + r), fill=(255, 0, 0))
     return img_copy
 
-# --- Vẽ đồ thị 20 vector đầu tiên ---
-def plot_embedding_comparison(query_emb, matched_emb):
-    fig, ax = plt.subplots()
-    x = np.arange(20)
-    ax.plot(x, query_emb[:20], label='Query', marker='o')
-    ax.plot(x, matched_emb[:20], label='Matched', marker='x')
-    ax.set_title("So sánh 20 vector đặc trưng đầu tiên")
-    ax.set_xlabel("Index vector")
-    ax.set_ylabel("Giá trị embedding")
-    ax.legend()
-    st.pyplot(fig)
-
-# --- Streamlit ---
-st.title("Nhận diện khuôn mặt - FaceNet + FAISS")
-
 # --- Tải database ---
+os.makedirs(DB_PATH, exist_ok=True)
 image_files = [os.path.join(DB_PATH, f) for f in os.listdir(DB_PATH)
                if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
 if not image_files:
-    st.error("⚠️ Thư mục data/known_faces trống.")
+    st.error("⚠️ Thư mục database trống — hãy thêm ảnh mẫu vào.")
+    st.stop()
+
+index, filenames = build_faiss_index(image_files)
+st.success(f"✅ Đã tải {len(filenames)} ảnh trong database!")
+
+# --- Giao diện ---
+st.title("🎥 Nhận diện khuôn mặt — Webcam & Upload ảnh")
+
+mode = st.radio("Chọn nguồn ảnh:", ["📸 Webcam", "📁 Tải ảnh từ file"])
+
+# --- Chụp ảnh từ webcam ---
+if mode == "📸 Webcam":
+    img_data = st.camera_input("Chụp ảnh khuôn mặt của bạn")
+    if img_data:
+        img = Image.open(img_data).convert("RGB")
+
+# --- Upload ảnh từ file ---
 else:
-    index, filenames = build_faiss_index(image_files)
-    st.success("✅ Database đã sẵn sàng!")
+    uploaded_file = st.file_uploader("Chọn ảnh để nhận diện", type=["jpg", "jpeg", "png"])
+    if uploaded_file:
+        img = Image.open(uploaded_file).convert("RGB")
 
-# --- Upload ảnh ---
-uploaded_file = st.file_uploader("📸 Tải ảnh để nhận diện", type=["jpg", "png", "jpeg"])
-if uploaded_file:
-    img = Image.open(uploaded_file).convert("RGB")
-
-    # --- Phát hiện khuôn mặt ---
+# --- Xử lý nhận diện nếu có ảnh ---
+if 'img' in locals():
     boxes, probs, landmarks_all = mtcnn.detect(img, landmarks=True)
 
     if boxes is None:
         st.error("❌ Không phát hiện được khuôn mặt!")
+        st.stop()
+
+    # --- Crop khuôn mặt ---
+    x1, y1, x2, y2 = boxes[0]
+    face_pil = img.crop((x1, y1, x2, y2)).resize((160, 160))
+
+    # --- Tạo embedding ---
+    face_tensor = torch.tensor(np.array(face_pil)).permute(2, 0, 1).float() / 255.0
+    face_tensor = (face_tensor.unsqueeze(0).to(device) * 2) - 1
+    query_emb = resnet(face_tensor).detach().cpu().numpy()
+
+    # --- Tìm trong FAISS ---
+    D, I = index.search(query_emb.astype('float32'), 1)
+    matched_path = filenames[I[0][0]]
+    distance = float(D[0][0])
+    person_name = os.path.splitext(os.path.basename(matched_path))[0]
+
+    threshold = 0.9  # ngưỡng có thể chỉnh
+
+    st.image(face_pil, caption="Khuôn mặt trích xuất", width=200)
+
+    if distance < threshold:
+        st.success(f"✅ Khớp với: **{person_name}** (Khoảng cách: {distance:.4f})")
+        st.image(Image.open(matched_path), caption=f"Ảnh trong database ({person_name})", width=200)
     else:
-        # --- Lấy khuôn mặt đầu tiên ---
-        x1, y1, x2, y2 = boxes[0]
-        face_pil = img.crop((x1, y1, x2, y2)).resize((160, 160))
-
-        # --- Landmarks trên crop ---
-        landmarks = landmarks_all[0] if landmarks_all is not None else None
-        if landmarks is not None:
-            scale_x = 160 / (x2 - x1)
-            scale_y = 160 / (y2 - y1)
-            landmarks_crop = np.copy(landmarks)
-            landmarks_crop[:, 0] = (landmarks[:, 0] - x1) * scale_x
-            landmarks_crop[:, 1] = (landmarks[:, 1] - y1) * scale_y
-        else:
-            landmarks_crop = None
-
-        face_landmarked = show_face_with_landmarks(face_pil, landmarks_crop)
-
-        # --- Embedding truy vấn ---
-        face_tensor_resnet = torch.tensor(np.array(face_pil)).permute(2, 0, 1).float() / 255.0
-        face_tensor_resnet = (face_tensor_resnet.unsqueeze(0).to(device) * 2) - 1
-        query_emb = resnet(face_tensor_resnet).detach().cpu().numpy()
-
-        # --- Tìm khuôn mặt gần nhất ---
-        D, I = index.search(query_emb.astype('float32'), 1)
-        matched_path = filenames[I[0][0]]
-        distance = float(D[0][0])  # khoảng cách FAISS (L2)
-        person_name = os.path.splitext(os.path.basename(matched_path))[0]
-
-        # --- Ngưỡng nhận diện ---
-        threshold = 0.9  # có thể tinh chỉnh 0.8–1.0 tùy dữ liệu
-
-        # --- Hiển thị ảnh truy vấn ---
-        st.image(face_landmarked, caption="Ảnh truy vấn (crop + landmarks, giữ màu gốc)", width=200)
-
-        # --- Nếu khớp ---
-        if distance < threshold:
-            # --- Ảnh khớp nhất ---
-            matched_img = Image.open(matched_path).convert("RGB")
-            boxes_db, probs_db, landmarks_all_db = mtcnn.detect(matched_img, landmarks=True)
-            if boxes_db is not None:
-                x1, y1, x2, y2 = boxes_db[0]
-                matched_face_pil = matched_img.crop((x1, y1, x2, y2)).resize((160, 160))
-            else:
-                matched_face_pil = matched_img.resize((160, 160))
-
-            landmarks_db = landmarks_all_db[0] if landmarks_all_db is not None else None
-            if landmarks_db is not None and boxes_db is not None:
-                scale_x = 160 / (x2 - x1)
-                scale_y = 160 / (y2 - y1)
-                landmarks_crop_db = np.copy(landmarks_db)
-                landmarks_crop_db[:, 0] = (landmarks_db[:, 0] - x1) * scale_x
-                landmarks_crop_db[:, 1] = (landmarks_db[:, 1] - y1) * scale_y
-            else:
-                landmarks_crop_db = None
-
-            matched_landmarked = show_face_with_landmarks(matched_face_pil, landmarks_crop_db)
-
-            # --- Hiển thị song song ---
-            col1, col2 = st.columns(2)
-            with col1:
-                st.image(face_landmarked, caption="Ảnh truy vấn", use_container_width=True)
-            with col2:
-                st.image(matched_landmarked, caption=f"Kết quả: {person_name}", use_container_width=True)
-
-            # --- Thông tin nhận dạng ---
-            st.markdown("---")
-            st.subheader("📊 Kết quả nhận diện")
-            st.success(f"✅ **Nhận diện thành công:** {person_name}\n\n📏 Khoảng cách: `{distance:.4f}` (Cùng người)")
-
-            # --- So sánh vector ---
-            matched_tensor_resnet = torch.tensor(np.array(matched_face_pil)).permute(2, 0, 1).float() / 255.0
-            matched_tensor_resnet = (matched_tensor_resnet.unsqueeze(0).to(device) * 2) - 1
-            matched_emb = resnet(matched_tensor_resnet).detach().cpu().numpy()
-
-            plot_embedding_comparison(query_emb.flatten(), matched_emb.flatten())
-
-        # --- Nếu KHÔNG khớp ---
-        else:
-            st.markdown("---")
-            st.subheader("📊 Kết quả nhận diện")
-            st.warning(f"⚠️ Không tồn tại trong dữ liệu!\n\n📏 Khoảng cách gần nhất: `{distance:.4f}`")
+        st.warning(f"⚠️ Không khớp (Khoảng cách: {distance:.4f})")
