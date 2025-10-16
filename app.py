@@ -9,7 +9,7 @@ from FAISS import build_faiss_index
 import matplotlib.pyplot as plt
 
 # --- Cấu hình ---
-DB_PATH = "data/database"
+DB_PATH = "database"
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # --- Khởi tạo MTCNN và ResNet ---
