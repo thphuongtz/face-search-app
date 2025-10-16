@@ -42,7 +42,7 @@ def plot_embedding_comparison(query_emb, matched_emb):
 st.title("Nhận diện khuôn mặt - FaceNet + FAISS")
 
 # --- Tải database ---
-image_files = [os.path.join(DB_PATH, f) for f in os.listdir(DB_PATH)
+image_files = [os.path.join(DB_PATH, f) for f in os.listdir(DB_PATH)]
                if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
 if not image_files:
     st.error("⚠️ Thư mục data/known_faces trống.")
