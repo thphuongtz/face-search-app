@@ -1,33 +1,56 @@
-import cv2
-import mediapipe as mp
 import numpy as np
+import faiss
+from facenet_pytorch import MTCNN, InceptionResnetV1
+from PIL import Image
+import torch
+import os
 
-mp_face = mp.solutions.face_detection
-detector = mp_face.FaceDetection(model_selection=1, min_detection_confidence=0.5)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def get_face_embedding(image):
-    """Phát hiện khuôn mặt và tạo vector đặc trưng (giả lập 512 chiều)."""
-    img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    results = detector.process(img_rgb)
-    if not results.detections:
-        return None, None
+# Khởi tạo MTCNN và ResNet
+mtcnn = MTCNN(image_size=160, margin=0, min_face_size=40, device=device)
+resnet = InceptionResnetV1(pretrained='vggface2').eval().to(device)
 
-    h, w, _ = image.shape
-    boxes, embeddings = [], []
 
-    for det in results.detections:
-        bbox = det.location_data.relative_bounding_box
-        x1, y1 = int(bbox.xmin * w), int(bbox.ymin * h)
-        x2, y2 = int((bbox.xmin + bbox.width) * w), int((bbox.ymin + bbox.height) * h)
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(w, x2), min(h, y2)
-        boxes.append((x1, y1, x2, y2))
+# --- Hàm lấy embedding từ tensor mặt đã crop ---
+def get_face_embedding(face_tensor, resnet_model=resnet):
+    """
+    face_tensor: tensor [3, H, W] hoặc [1, 3, H, W]
+    resnet_model: InceptionResnetV1 instance
+    """
+    if face_tensor is None:
+        return None
 
-        face_crop = image[y1:y2, x1:x2]
-        if face_crop.size == 0:
-            continue
-        mean_rgb = np.mean(face_crop, axis=(0, 1)) / 255.0
-        emb = np.pad(mean_rgb, (0, 512 - len(mean_rgb)), mode='constant')
-        embeddings.append(emb)
+    # đảm bảo tensor có batch dimension
+    if face_tensor.ndim == 3:
+        face_tensor = face_tensor.unsqueeze(0)
 
-    return boxes, np.array(embeddings)
+    with torch.no_grad():
+        embedding = resnet_model(face_tensor.to(device))  # [1, 512]
+
+    return embedding.squeeze().cpu().numpy()  # [512]
+
+
+# --- Hàm crop mặt từ file ảnh ---
+def crop_face_from_file(img_path):
+    img = Image.open(img_path).convert("RGB")
+    img_cropped = mtcnn(img)  # trả về tensor hoặc None
+    return img_cropped
+
+
+# --- Hàm xây dựng FAISS index từ file ảnh ---
+def build_faiss_index(image_files):
+    embeddings = []
+    filenames = []
+
+    for img_path in image_files:
+        face_tensor = crop_face_from_file(img_path)
+        emb = get_face_embedding(face_tensor)
+        if emb is not None:
+            embeddings.append(emb)
+            filenames.append(img_path)
+
+    embeddings = np.array(embeddings).astype('float32')
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(embeddings)
+    return index, filenames
