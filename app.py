@@ -1,7 +1,7 @@
 import streamlit as st
 import torch
 from facenet_pytorch import MTCNN, InceptionResnetV1
-from PIL import Image, ImageDraw
+from PIL import Image
 import numpy as np
 import faiss
 import os
@@ -35,7 +35,6 @@ mode = st.radio("Chọn nguồn ảnh:", ["📸 Webcam", "📁 Tải ảnh từ 
 if mode == "📸 Webcam":
     st.info("🧠 Hệ thống sẽ tự nhận diện khuôn mặt ngay sau khi chụp.")
     img_data = st.camera_input("Bật webcam để chụp tự động")
-
     if img_data:
         img = Image.open(img_data).convert("RGB")
 
@@ -49,8 +48,7 @@ else:
 
 # --- Xử lý ảnh (nếu có) ---
 if 'img' in locals():
-    boxes, probs, landmarks_all = mtcnn.detect(img, landmarks=True)
-
+    boxes, _ = mtcnn.detect(img)
     if boxes is None:
         st.error("❌ Không phát hiện được khuôn mặt!")
         st.stop()
@@ -73,15 +71,10 @@ if 'img' in locals():
 
     # --- Cắt khuôn mặt từ ảnh database ---
     db_img = Image.open(matched_path).convert("RGB")
-    detect_result = mtcnn.detect(db_img)
-
-    if detect_result is not None:
-        db_boxes, _, _ = detect_result
-        if db_boxes is not None:
-            x1d, y1d, x2d, y2d = db_boxes[0]
-            matched_face = db_img.crop((x1d, y1d, x2d, y2d)).resize((160, 160))
-        else:
-            matched_face = db_img.resize((160, 160))
+    db_boxes, _ = mtcnn.detect(db_img)
+    if db_boxes is not None:
+        x1d, y1d, x2d, y2d = db_boxes[0]
+        matched_face = db_img.crop((x1d, y1d, x2d, y2d)).resize((160, 160))
     else:
         matched_face = db_img.resize((160, 160))
 
